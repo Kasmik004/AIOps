@@ -3,6 +3,8 @@ from fastapi import FastAPI, Request
 from dotenv import load_dotenv
 import os
 
+from agent import run_agent
+
 load_dotenv()  # Load environment variables from .env file
 
 app = FastAPI()
@@ -20,8 +22,16 @@ async def webhook(request: Request):
         chat_id = data["message"]["chat"]["id"]
         user_text = data["message"]["text"]
 
-        # Prepare the payload to send back
-        payload = {"chat_id": chat_id, "text": f"You said: {user_text}"}
+        if user_text.startswith("/create_issue"):
+            # Extract title and body from the command
+            command = user_text[len("/create_issue") :].strip()
+
+            response = await run_agent(command)  # You can modify the body as needed
+            # Prepare the payload to send back
+            payload = {"chat_id": chat_id, "text": f"{response}"}
+        else:
+            # Prepare the payload to send back
+            payload = {"chat_id": chat_id, "text": f"You said: {user_text}"}
 
         # Send the message back to the user asynchronously
         async with httpx.AsyncClient() as client:
@@ -33,4 +43,4 @@ async def webhook(request: Request):
 
 @app.get("/")
 async def root():
-    return {"message": "Hello, this is the Telegram bot webhook server!"}
+    return {"message": "Hello, this is the Telegram bot webhook server, new!"}

@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+langgraph
+mcp
+httpx
+python-dotenv
