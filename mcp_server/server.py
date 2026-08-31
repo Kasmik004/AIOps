@@ -17,8 +17,7 @@ mcp = FastMCP("GitHubHelper")
 # The decorator tells the MCP server to expose this function to the AI.
 @mcp.tool()
 def create_github_issue(
-    repo_name: str = os.getenv("GITHUB_REPOSITORY")
-    or "Kasmik004/unnecessary-agent-to-add-and-multiply",
+    repo_name: str = os.getenv("GITHUB_REPOSITORY"),
     title: str = "Issue Test",
     body: str = "This is a test issue.",
 ) -> str:
