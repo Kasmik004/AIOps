@@ -3,7 +3,7 @@ from fastapi import FastAPI, Request
 
 app = FastAPI()
 
-TOKEN = "8883448152:AAF76GiKY55idpDCKf_E81eH5w2mTuEyhXg"
+TOKEN = "tokenhere"
 TELEGRAM_API = f"https://api.telegram.org/bot{TOKEN}"
 
 
