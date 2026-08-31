@@ -1,4 +1,8 @@
 import asyncio
+import logging
+import sys
+from pathlib import Path
+
 from dotenv import load_dotenv
 import os
 from langchain_groq import ChatGroq
@@ -16,29 +20,74 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.types import interrupt, Command
 
+from logging import getLogger
+
+logger = logging.getLogger("aiops")
+
 load_dotenv()  # Load environment variables from .env file
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 
+def normalize_message_text(message) -> str:
+    if message is None:
+        return ""
+
+    content = getattr(message, "content", message)
+
+    if isinstance(content, str):
+        clean = content.strip()
+        if clean:
+            return clean
+
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict) and "text" in item and item["text"]:
+                parts.append(str(item["text"]).strip())
+            elif hasattr(item, "text") and item.text:
+                parts.append(str(item.text).strip())
+        joined = " ".join(p for p in parts if p)
+        if joined:
+            return joined
+
+    tool_calls = getattr(message, "tool_calls", None)
+    if tool_calls:
+        first_tool = tool_calls[0]
+        name = (
+            first_tool.get("name")
+            if isinstance(first_tool, dict)
+            else getattr(first_tool, "name", "tool")
+        )
+        return f"I need your approval before I run the {name} tool."
+
+    return ""
+
+
+def get_mcp_server_config():
+    project_root = Path(__file__).resolve().parent.parent
+    server_script = project_root / "mcp_server" / "server.py"
+    return {
+        "command": sys.executable,
+        "args": [str(server_script)],
+        "transport": "stdio",
+        "cwd": str(project_root),
+    }
+
+
 async def run_agent(command=None, chat_id=None, resume_decision=None):
-    client = MultiServerMCPClient(
-        {
-            "GitHubHelper": {
-                "command": "uv",
-                "args": ["run", "python", "../mcp_server/server.py"],
-                "transport": "stdio",
-            }
-        }
-    )
+    client = MultiServerMCPClient({"GitHubHelper": get_mcp_server_config()})
     tools = await client.get_tools()
+
+    logger.info(f"Available tools: {[tool.name for tool in tools]}")
 
     llm = ChatGroq(model="qwen/qwen3.6-27b", temperature=0)
 
     llm_with_tools = llm.bind_tools(tools)
 
-    async def call_model(state: MessagesState):
+    async def call_model(state: MessagesState) -> MessagesState:
         messages = state["messages"]
+        logger.info(f"Calling model with messages: {[m.content for m in messages]}")
 
         trimmed_messages = trim_messages(
             state["messages"], max_tokens=8, strategy="last", token_counter=len
@@ -48,20 +97,26 @@ async def run_agent(command=None, chat_id=None, resume_decision=None):
                 SystemMessage(content="You are a helpful GitHub Helper Agent.")
             ] + trimmed_messages
         response = await llm_with_tools.ainvoke(trimmed_messages)
+        logger.info(f"Model response: {response}")
         return {"messages": [response]}
         # raise RuntimeError("Server crashed mid-execution.")
 
     def human_approval(state: MessagesState):
         last_message = state["messages"][-1]
+        logger.info("Human Approval Section: Last message from model:")
+        logger.info(f"Last message from model: {last_message}")
 
         tool_call = last_message.tool_calls[0]
         decision = interrupt(
             {"description": f"The agent wants to execute: `{tool_call['name']}`"}
         )
 
+        logger.info(f"Human approval decision: {decision}")
         if decision == "approve":
+            logger.info("Human approved the action. Proceeding to tools.")
             return Command(goto="tools")
 
+        logger.info("Human rejected the action. Returning to LLM.")
         reject_msgs = [
             ToolMessage(tool_call_id=tc["id"], content="Action rejected by the human.")
             for tc in last_message.tool_calls
@@ -97,6 +152,7 @@ async def run_agent(command=None, chat_id=None, resume_decision=None):
 
         if resume_decision:
             inputs = Command(resume=resume_decision)
+
         else:
             inputs = (
                 {"messages": [HumanMessage(content=command)]}
@@ -112,13 +168,31 @@ async def run_agent(command=None, chat_id=None, resume_decision=None):
 
         final_response = "I have processed your request, but I cannot provide a response at this time."
 
-        async for chunk in app.astream(inputs, config=config, stream_mode="values"):
-            last_msg = chunk["messages"][-1]
+        result = {"text": final_response, "interrupt": None}
 
-            if last_msg.type == "ai" and last_msg.content:
-                final_response = last_msg.content
+        async for chunk in app.astream(inputs, config=config, stream_mode="updates"):
+            if "__interrupt__" in chunk:
+                result["interrupt"] = chunk["__interrupt__"][0].value
+                result["text"] = (
+                    f"I need your approval before I run: "
+                    f"{result['interrupt'].get('description', 'this GitHub action')}."
+                )
+                break
 
-        return final_response
+            if "llm" in chunk:
+                messages = chunk["llm"].get("messages", [])
+                if messages:
+                    last_msg = messages[-1]
+                    if isinstance(last_msg, AIMessage):
+                        normalized = normalize_message_text(last_msg)
+                        if normalized:
+                            result["text"] = normalized
+                        elif getattr(last_msg, "tool_calls", None):
+                            result["text"] = (
+                                "I need your approval before I run this GitHub action."
+                            )
+
+        return result
     # response = await app.ainvoke(inputs)
     # messages = response["messages"]
     # return (
