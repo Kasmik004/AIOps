@@ -1,6 +1,11 @@
 fastapi
 uvicorn
-langgraph
-mcp
 httpx
 python-dotenv
+langchain_groq
+langchain-mcp-adapters
+langgraph
+langgraph-checkpoint-postgres
+psycopg[pool,binary]
+mcp
+PyGithub
