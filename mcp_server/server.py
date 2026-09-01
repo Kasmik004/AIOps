@@ -63,14 +63,20 @@ def create_graphify_knowledge_graph():
     print("Graphify knowledge graph built successfully.")
     # return f"Knowledge graph built for {sha}: {subj}"
 
+    # _run(["git", "fetch", "origin"])
+    # _run(["git", "reset", "--hard", f"origin/{BRANCH}"])
+    # _run(["graphify", ".", "--update", "--no-viz", "--directed"])
+    # sha = _run(["git", "rev-parse", "--short", "HEAD"])
+    # subj = _run(["git", "log", "-1", "--pretty=%s"])
+    # return f"Synced to {sha}: {subj} — knowledge graph rebuilt."
+
 
 @mcp.tool()
 def sync_codebase() -> str:
     """Pull latest from origin and rebuild the Graphify knowledge graph.
     Returns the new HEAD commit so you know what's now indexed."""
-    _run(["git", "fetch", "origin"])
-    _run(["git", "reset", "--hard", f"origin/{BRANCH}"])
-    _run(["graphify", ".", "--update", "--no-viz", "--directed"])
+    _run(["git", "pull", "origin", BRANCH])
+    _run(["graphify", "update", "."])
     sha = _run(["git", "rev-parse", "--short", "HEAD"])
     subj = _run(["git", "log", "-1", "--pretty=%s"])
     return f"Synced to {sha}: {subj} — knowledge graph rebuilt."
@@ -83,5 +89,6 @@ if __name__ == "__main__":
 
     if not os.environ.get("GITHUB_TOKEN"):
         print("Error: GITHUB_TOKEN environment variable is missing.")
+    # print(pull())
     # print(check_if_repo_exists())
     # create_graphify_knowledge_graph()

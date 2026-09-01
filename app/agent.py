@@ -20,6 +20,10 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.types import interrupt, Command
 
+from typing import Annotated
+from functools import reduce
+
+
 from logging import getLogger
 
 logger = logging.getLogger("aiops")
@@ -27,6 +31,14 @@ logger = logging.getLogger("aiops")
 load_dotenv()  # Load environment variables from .env file
 
 DATABASE_URL = os.getenv("DATABASE_URL")
+
+
+# def merge_tools(current: set[str], new: set[str]) -> set[str]:
+#     return current | new
+
+
+class AgentState(MessagesState):
+    accepted_tools: set[str]
 
 
 def normalize_message_text(message) -> str:
@@ -108,12 +120,12 @@ async def run_agent(command=None, chat_id=None, resume_decision=None):
 
     llm_with_tools = llm.bind_tools(tools)
 
-    async def call_model(state: MessagesState) -> MessagesState:
+    async def call_model(state: AgentState) -> AgentState:
         messages = state["messages"]
         logger.info(f"Calling model with messages: {[m.content for m in messages]}")
 
         trimmed_messages = trim_messages(
-            state["messages"], max_tokens=8, strategy="last", token_counter=len
+            state["messages"], max_tokens=15, strategy="last", token_counter=len
         )
         if not any(isinstance(m, SystemMessage) for m in trimmed_messages):
             trimmed_messages = [
@@ -121,15 +133,25 @@ async def run_agent(command=None, chat_id=None, resume_decision=None):
             ] + trimmed_messages
         response = await llm_with_tools.ainvoke(trimmed_messages)
         logger.info(f"Model response: {response}")
-        return {"messages": [response]}
+        return {
+            "messages": [response],
+            "accepted_tools": state.get("accepted_tools", set()),
+        }
         # raise RuntimeError("Server crashed mid-execution.")
 
-    def human_approval(state: MessagesState):
+    def human_approval(state: AgentState):
         last_message = state["messages"][-1]
         logger.info("Human Approval Section: Last message from model:")
         logger.info(f"Last message from model: {last_message}")
 
         tool_call = last_message.tool_calls[0]
+
+        if tool_call["name"] in state["accepted_tools"]:
+            logger.info(
+                f"Tool {tool_call['name']} already approved. Proceeding to tools."
+            )
+            return Command(goto="tools")
+
         decision = interrupt(
             {"description": f"The agent wants to execute: `{tool_call['name']}`"}
         )
@@ -137,7 +159,9 @@ async def run_agent(command=None, chat_id=None, resume_decision=None):
         logger.info(f"Human approval decision: {decision}")
         if decision == "approve":
             logger.info("Human approved the action. Proceeding to tools.")
-            return Command(goto="tools")
+            accepted_tools = state.get("accepted_tools", set())
+            accepted_tools = accepted_tools | {tool_call["name"]}
+            return Command(update={"accepted_tools": accepted_tools}, goto="tools")
 
         logger.info("Human rejected the action. Returning to LLM.")
         reject_msgs = [
@@ -149,7 +173,7 @@ async def run_agent(command=None, chat_id=None, resume_decision=None):
 
     tool_node = ToolNode(tools)
 
-    workflow = StateGraph(MessagesState)
+    workflow = StateGraph(AgentState)
 
     workflow.add_node("tools", tool_node)
     workflow.add_node("llm", call_model)
