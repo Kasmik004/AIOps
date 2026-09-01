@@ -74,7 +74,15 @@ def create_graphify_knowledge_graph():
 @mcp.tool()
 def sync_codebase() -> str:
     """Pull latest from origin and rebuild the Graphify knowledge graph.
-    Returns the new HEAD commit so you know what's now indexed."""
+    Returns the new HEAD commit so you know what's now indexed.
+
+    Args:
+        None
+
+    Returns:
+        A string indicating the new HEAD commit and its subject line after syncing and rebuilding the knowledge graph.
+        Example: "Synced to abc123: Updated README — knowledge graph rebuilt."
+    """
     _run(["git", "pull", "origin", BRANCH])
     _run(["graphify", "update", "."])
     sha = _run(["git", "rev-parse", "--short", "HEAD"])

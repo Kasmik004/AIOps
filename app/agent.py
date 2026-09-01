@@ -146,6 +146,12 @@ async def run_agent(command=None, chat_id=None, resume_decision=None):
 
         tool_call = last_message.tool_calls[0]
 
+        if tool_call["name"] == "sync_codebase":
+            logger.info(
+                "Tool 'sync_codebase' does not require human approval. Proceeding to tools."
+            )
+            return Command(goto="tools")
+
         if tool_call["name"] in state["accepted_tools"]:
             logger.info(
                 f"Tool {tool_call['name']} already approved. Proceeding to tools."

@@ -62,6 +62,16 @@ async def process_telegram_update(data):
                         },
                     )
 
+                    if "sync_codebase" in callback["message"]["text"]:
+                        payload = {
+                            "chat_id": chat_id,
+                            "text": "Syncing codebase and rebuilding knowledge graph...",
+                        }
+                        await client.post(
+                            f"{TELEGRAM_API}/sendMessage",
+                            json=payload,
+                        )
+
                 result = await run_agent(chat_id=chat_id, resume_decision=decision)
 
                 payload = {
