@@ -77,7 +77,8 @@ def get_mcp_server_config():
 
 def get_graphify_server_config():
     project_root = Path(__file__).resolve().parent.parent
-    GRAPH_JSON = project_root / "graph" / "graphify-out" / "graph.json"
+    GRAPH_JSON = project_root.parent / "first_steps" / "graphify-out" / "graph.json"
+
     server_params = {
         "command": "python",
         "args": ["-m", "graphify.serve", str(GRAPH_JSON)],
@@ -94,6 +95,12 @@ async def run_agent(command=None, chat_id=None, resume_decision=None):
         }
     )
     tools = await client.get_tools()
+
+    # print("hi")
+
+    # tool_list = [tool.name for tool in tools]
+
+    # return tool_list  # Return the tools for inspection
 
     logger.info(f"Available tools: {[tool.name for tool in tools]}")
 
@@ -173,13 +180,7 @@ async def run_agent(command=None, chat_id=None, resume_decision=None):
             inputs = (
                 {"messages": [HumanMessage(content=command)]}
                 if command
-                else {
-                    "messages": [
-                        HumanMessage(
-                            content="Create a GitHub issue with title 'Test Issue' and body 'This is a test issue.'"
-                        )
-                    ]
-                }
+                else {"messages": [HumanMessage(content="Hi.")]}
             )
 
         final_response = "I have processed your request, but I cannot provide a response at this time."
