@@ -1,0 +1,95 @@
+{
+  "communities": {
+    "0": [
+      "code_server",
+      "code_server_agentstate",
+      "code_server_main",
+      "messagesstate"
+    ],
+    "1": [
+      "get",
+      "test",
+      "test_get_items",
+      "test_read_root"
+    ],
+    "2": [
+      "delete",
+      "test_delete_item"
+    ],
+    "3": [
+      "patch",
+      "test_patch_item"
+    ],
+    "4": [
+      "post",
+      "test_create_item"
+    ],
+    "5": [
+      "put",
+      "test_update_item"
+    ]
+  },
+  "cohesion": {
+    "0": 0.5,
+    "1": 0.6666666666666666,
+    "2": 1.0,
+    "3": 1.0,
+    "4": 1.0,
+    "5": 1.0
+  },
+  "gods": [
+    {
+      "id": "code_server_agentstate",
+      "label": "AgentState",
+      "degree": 2
+    },
+    {
+      "id": "test_get_items",
+      "label": "get_items()",
+      "degree": 2
+    },
+    {
+      "id": "test_read_root",
+      "label": "read_root()",
+      "degree": 2
+    },
+    {
+      "id": "test_delete_item",
+      "label": "delete_item()",
+      "degree": 2
+    },
+    {
+      "id": "test_patch_item",
+      "label": "patch_item()",
+      "degree": 2
+    },
+    {
+      "id": "test_create_item",
+      "label": "create_item()",
+      "degree": 2
+    },
+    {
+      "id": "test_update_item",
+      "label": "update_item()",
+      "degree": 2
+    }
+  ],
+  "surprises": [],
+  "questions": [
+    {
+      "type": "bridge_node",
+      "question": "Why does `delete_item()` connect `delete_item` to `test.py`?",
+      "why": "High betweenness centrality (0.095) - this node is a cross-community bridge."
+    },
+    {
+      "type": "bridge_node",
+      "question": "Why does `patch_item()` connect `patch_item` to `test.py`?",
+      "why": "High betweenness centrality (0.095) - this node is a cross-community bridge."
+    },
+    {
+      "type": "bridge_node",
+      "question": "Why does `create_item()` connect `create_item` to `test.py`?",
+      "why": "High betweenness centrality (0.095) - this node is a cross-community bridge."
+    }
+  ]
+}
