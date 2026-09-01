@@ -75,8 +75,24 @@ def get_mcp_server_config():
     }
 
 
+def get_graphify_server_config():
+    project_root = Path(__file__).resolve().parent.parent
+    GRAPH_JSON = project_root / "graph" / "graphify-out" / "graph.json"
+    server_params = {
+        "command": "python",
+        "args": ["-m", "graphify.serve", str(GRAPH_JSON)],
+        "transport": "stdio",
+    }
+    return server_params
+
+
 async def run_agent(command=None, chat_id=None, resume_decision=None):
-    client = MultiServerMCPClient({"GitHubHelper": get_mcp_server_config()})
+    client = MultiServerMCPClient(
+        {
+            "GitHubHelper": get_mcp_server_config(),
+            "graphify": get_graphify_server_config(),
+        }
+    )
     tools = await client.get_tools()
 
     logger.info(f"Available tools: {[tool.name for tool in tools]}")
@@ -203,3 +219,4 @@ async def run_agent(command=None, chat_id=None, resume_decision=None):
 if __name__ == "__main__":
     response = asyncio.run(run_agent())
     print(response)
+    # print(response)
