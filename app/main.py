@@ -116,16 +116,32 @@ async def process_telegram_update(data):
                     command = user_text[len("/talk") :].strip()
                     logger.info(f"Processing talk command: {command}")
 
-                    result = await run_agent(
-                        command=command, chat_id=chat_id
-                    )  # You can modify the body as needed
-                    reply_text = (
-                        result.get("text") if isinstance(result, dict) else str(result)
-                    )
-                    if not reply_text or not str(reply_text).strip():
-                        reply_text = "I’m preparing the GitHub action."
-                    logger.info(f"Replying to chat_id {chat_id} with: {reply_text}")
-                    payload = {"chat_id": chat_id, "text": reply_text}
+                    # result = await run_agent(
+                    #     command=command, chat_id=chat_id
+                    # )  # You can modify the body as needed
+
+                    async for result in run_agent(command=command, chat_id=chat_id):
+                        if result.get("type") == "info":
+                            info_text = result.get("text", "")
+                            logger.info(f"Info from agent: {info_text}")
+                            payload = {"chat_id": chat_id, "text": info_text}
+                            async with httpx.AsyncClient(timeout=10.0) as client:
+                                response = await client.post(
+                                    f"{TELEGRAM_API}/sendMessage", json=payload
+                                )
+                                response.raise_for_status()
+                        else:
+                            reply_text = (
+                                result.get("text")
+                                if isinstance(result, dict)
+                                else str(result)
+                            )
+                            if not reply_text or not str(reply_text).strip():
+                                reply_text = "I’m preparing the GitHub action."
+                            logger.info(
+                                f"Replying to chat_id {chat_id} with: {reply_text}"
+                            )
+                            payload = {"chat_id": chat_id, "text": reply_text}
 
                 else:
                     # Prepare the payload to send back

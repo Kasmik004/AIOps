@@ -47,7 +47,15 @@ BRANCH = "main"  # hardcoded — never from the model
 
 
 def _run(cmd: list[str]) -> str:
-    r = subprocess.run(cmd, cwd=REPO_DIR, check=True, capture_output=True, text=True)
+    r = subprocess.run(
+        cmd,
+        cwd=REPO_DIR,
+        check=True,
+        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        text=True,
+        timeout=120,
+    )
     return r.stdout.strip()
 
 
@@ -97,6 +105,6 @@ if __name__ == "__main__":
 
     if not os.environ.get("GITHUB_TOKEN"):
         print("Error: GITHUB_TOKEN environment variable is missing.")
-    # print(pull())
+    # print(sync_codebase())
     # print(check_if_repo_exists())
     # create_graphify_knowledge_graph()

@@ -19,6 +19,7 @@ from langchain_core.messages import (
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.types import interrupt, Command
+from langgraph.config import get_stream_writer
 
 from typing import Annotated
 from functools import reduce
@@ -140,6 +141,7 @@ async def run_agent(command=None, chat_id=None, resume_decision=None):
         # raise RuntimeError("Server crashed mid-execution.")
 
     def human_approval(state: AgentState):
+        # writer = get_stream_writer()
         last_message = state["messages"][-1]
         logger.info("Human Approval Section: Last message from model:")
         logger.info(f"Last message from model: {last_message}")
@@ -150,6 +152,11 @@ async def run_agent(command=None, chat_id=None, resume_decision=None):
             logger.info(
                 "Tool 'sync_codebase' does not require human approval. Proceeding to tools."
             )
+            # yield {
+            #     "type": "info",
+            #     "text": "sync_codebase tools is syncing the codebase.",
+            # }
+
             return Command(goto="tools")
 
         if tool_call["name"] in state["accepted_tools"]:
@@ -215,7 +222,7 @@ async def run_agent(command=None, chat_id=None, resume_decision=None):
 
         final_response = "I have processed your request, but I cannot provide a response at this time."
 
-        result = {"text": final_response, "interrupt": None}
+        result = {"text": final_response, "interrupt": None, "type": "final"}
 
         async for chunk in app.astream(inputs, config=config, stream_mode="updates"):
             if "__interrupt__" in chunk:
@@ -239,7 +246,7 @@ async def run_agent(command=None, chat_id=None, resume_decision=None):
                                 "I need your approval before I run this GitHub action."
                             )
 
-        return result
+        yield result
     # response = await app.ainvoke(inputs)
     # messages = response["messages"]
     # return (
