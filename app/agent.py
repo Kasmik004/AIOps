@@ -141,7 +141,7 @@ async def run_agent(command=None, chat_id=None, resume_decision=None):
         # raise RuntimeError("Server crashed mid-execution.")
 
     def human_approval(state: AgentState):
-        # writer = get_stream_writer()
+        writer = get_stream_writer()
         last_message = state["messages"][-1]
         logger.info("Human Approval Section: Last message from model:")
         logger.info(f"Last message from model: {last_message}")
@@ -156,6 +156,12 @@ async def run_agent(command=None, chat_id=None, resume_decision=None):
             #     "type": "info",
             #     "text": "sync_codebase tools is syncing the codebase.",
             # }
+            writer(
+                {
+                    "type": "info",
+                    "text": "sync_codebase tools is syncing the codebase.",
+                }
+            )
 
             return Command(goto="tools")
 
@@ -212,41 +218,64 @@ async def run_agent(command=None, chat_id=None, resume_decision=None):
 
         if resume_decision:
             inputs = Command(resume=resume_decision)
+            yield {
+                "text": "Resuming the agent with the provided decision.",
+                "interrupt": None,
+                "type": "info",
+            }
 
         else:
+
             inputs = (
                 {"messages": [HumanMessage(content=command)]}
                 if command
                 else {"messages": [HumanMessage(content="Hi.")]}
             )
 
+            yield {
+                "text": "Starting the agent with the provided command.",
+                "interrupt": None,
+                "type": "info",
+            }
+
         final_response = "I have processed your request, but I cannot provide a response at this time."
 
         result = {"text": final_response, "interrupt": None, "type": "final"}
 
-        async for chunk in app.astream(inputs, config=config, stream_mode="updates"):
-            if "__interrupt__" in chunk:
-                result["interrupt"] = chunk["__interrupt__"][0].value
-                result["text"] = (
-                    f"I need your approval before I run: "
-                    f"{result['interrupt'].get('description', 'this GitHub action')}."
-                )
-                break
+        async for mode, chunk in app.astream(
+            inputs, config=config, stream_mode=["updates", "custom"]
+        ):
 
-            if "llm" in chunk:
-                messages = chunk["llm"].get("messages", [])
-                if messages:
-                    last_msg = messages[-1]
-                    if isinstance(last_msg, AIMessage):
-                        normalized = normalize_message_text(last_msg)
-                        if normalized:
-                            result["text"] = normalized
-                        elif getattr(last_msg, "tool_calls", None):
-                            result["text"] = (
-                                "I need your approval before I run this GitHub action."
-                            )
+            if mode == "updates":
+                logger.info(f"Received update chunk: {chunk}")
+                if "__interrupt__" in chunk:
+                    result["interrupt"] = chunk["__interrupt__"][0].value
+                    result["text"] = (
+                        f"I need your approval before I run: "
+                        f"{result['interrupt'].get('description', 'this GitHub action')}."
+                    )
+                    break
 
-        yield result
+                if "llm" in chunk:
+                    messages = chunk["llm"].get("messages", [])
+                    if messages:
+                        last_msg = messages[-1]
+                        if isinstance(last_msg, AIMessage):
+                            normalized = normalize_message_text(last_msg)
+                            if normalized:
+                                result["text"] = normalized
+                            elif getattr(last_msg, "tool_calls", None):
+                                result["text"] = (
+                                    "I need your approval before I run this GitHub action."
+                                )
+
+                yield result
+            elif mode == "custom":
+                logger.info(f"Received custom chunk: {chunk}")
+                if chunk.get("type") == "info":
+                    info_text = chunk["text"]
+                    if info_text:
+                        yield {"text": info_text, "type": "info", "interrupt": None}
     # response = await app.ainvoke(inputs)
     # messages = response["messages"]
     # return (
