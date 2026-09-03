@@ -1,178 +1,130 @@
-# LangOps
+# AIOps
 
-An AI-powered Telegram bot that turns natural-language requests into GitHub issues. The bot is built with LangGraph for orchestration, FastAPI for the webhook server, Telegram for user interaction, and a custom MCP server for GitHub actions.
+A Telegram bot that turns plain-English requests into real GitHub actions, using a [LangGraph](https://github.com/langchain-ai/langgraph) agent with a human-approval gate in front of every tool call. It also plugs into [Graphify](https://pypi.org/project/graphifyy/), a code-knowledge-graph tool, so the agent can answer questions about a codebase by walking a graph of it instead of guessing.
 
-## Overview
+Send the bot a message like:
 
-This project allows a user to send a message like:
+> Create a GitHub issue for a bug where users can't log in after resetting their password.
 
-- Create a GitHub issue for a login bug
-- Open an issue about slow API responses
-- File a bug report for the dashboard not loading
+The agent parses the request, drafts the tool call, asks you to **Approve / Reject** it via a Telegram inline button, and only then creates the issue.
 
-The bot interprets the request, decides whether the action is appropriate, and creates the corresponding GitHub issue through a custom MCP tool layer.
+## How it works
 
-## Architecture
+```mermaid
+flowchart LR
+    U[Telegram user] -->|message| TG[Telegram Bot API]
+    TG -->|webhook POST| FA[FastAPI /webhook]
+    FA -->|background task| AG[LangGraph agent]
+    AG <-->|checkpointed state| PG[(Postgres)]
+    AG -->|tool calls| MCP1[GitHub MCP server]
+    AG -->|tool calls| MCP2[Graphify MCP server]
+    MCP1 -->|PyGithub| GH[(GitHub API)]
+    MCP2 -->|reads| GJ[(graph.json)]
+    AG -->|Approve/Reject prompt| TG
+```
 
-The project is composed of four main parts:
+1. A user messages the Telegram bot; Telegram calls the app's `/webhook` endpoint.
+2. FastAPI validates the request (webhook secret, user allowlist, duplicate `update_id` filtering) and hands it off to a background task so Telegram gets an immediate `200 OK`.
+3. The background task drives a **LangGraph** state machine: an LLM node decides what to do, and if it wants to call a tool, execution stops at a **human-approval** node.
+4. The bot sends the proposed action back to the user as an inline-keyboard message (`Approve` / `Reject`).
+5. The user's tap comes back as a Telegram `callback_query`, which **resumes the same graph run** from where it paused (via LangGraph's `interrupt`/`Command(resume=...)`), using conversation state checkpointed in Postgres.
+6. On approval, the graph executes the tool through one of two **MCP servers** — a custom GitHub server, or a Graphify code-graph server — and the result flows back to the user.
 
-- LangGraph agent: handles intent understanding, decision-making, and workflow orchestration
-- FastAPI app: receives Telegram webhook updates and exposes the bot API endpoints
-- Telegram bot: interacts with users through chat messages and buttons
-- Custom MCP server: exposes GitHub tools to the agent so it can create issues safely
+## Core concepts
 
-### High-level flow
-
-1. User sends a message to the Telegram bot.
-2. FastAPI receives the webhook event.
-3. The LangGraph agent reads the request and determines the correct action.
-4. The agent calls a GitHub tool exposed by the MCP server.
-5. A GitHub issue is created in the target repository.
-6. The bot responds to the user with confirmation or status.
+- **Human-in-the-loop tool execution.** Every tool call the LLM proposes is intercepted by a `human_approval` node ([app/agent.py](app/agent.py)) before it reaches the `tools` node. The graph is paused with LangGraph's `interrupt()`, and only resumed once a decision (`approve`/`reject`) is supplied.
+- **Per-conversation tool trust.** Once a tool is approved once in a conversation, it's added to `accepted_tools` in the graph state and auto-approved for the rest of that thread — you don't get asked to approve `create_github_issue` on every single call. `sync_codebase` is treated as safe and always skips approval entirely.
+- **Durable, resumable state.** Each webhook call is a fresh, stateless HTTP request/process invocation — nothing survives in memory between them. LangGraph's `AsyncPostgresSaver` checkpoints the entire graph state (messages, pending interrupts, accepted tools) to Postgres, keyed by `thread_id = telegram_chat_id`, so a conversation — including a paused approval — survives across separate webhook calls.
+- **Multi-server MCP.** The agent doesn't hardcode its tools. `MultiServerMCPClient` (from `langchain-mcp-adapters`) launches and merges tools from two independent [MCP](https://modelcontextprotocol.io/) servers over stdio — a custom GitHub server and Graphify's code-graph server — into one toolset handed to the LLM.
+- **Streamed progress, not just a final answer.** The graph is run with `astream(..., stream_mode=["updates", "custom"])`. `"updates"` carries state deltas (including interrupts); `"custom"` carries ad-hoc progress messages pushed via `get_stream_writer()` (e.g. "syncing codebase..."), so long-running tools can narrate what they're doing before the final reply.
+- **Codebase Q&A grounded in a real graph, not guesses.** Graphify statically parses a codebase into nodes/edges/communities (functions, classes, files, and how they connect), stores it as `graph.json`, and serves it back over its own MCP server. [graph/code_server.py](graph/code_server.py) shows this in isolation: a LangGraph agent with a system prompt that forces it to call a graph tool and cite `file:line` rather than answer from training data. `sync_codebase` ([mcp_server/server.py](mcp_server/server.py)) keeps that graph fresh by `git pull`-ing the target repo and running `graphify update` after code changes.
+- **Idempotent webhook handling.** Telegram retries webhook deliveries it doesn't get a fast `200` for. [app/main.py](app/main.py) tracks seen `update_id`s in a capped in-memory set so retried deliveries are dropped instead of double-processed.
 
 ## Tech stack
 
-- Python
-- FastAPI
-- LangGraph
-- LangChain Groq
-- Telegram Bot API
-- Model Context Protocol (MCP)
-- GitHub API / PyGithub
-- Docker
+| Layer | Tools |
+|---|---|
+| Runtime | Python 3.13 |
+| Web server | FastAPI, Uvicorn |
+| Chat interface | Telegram Bot API (webhooks, inline keyboards) via `httpx` |
+| Agent orchestration | LangGraph (`StateGraph`, `interrupt`/`Command`, streaming, `ToolNode`) |
+| LLM layer | LangChain, `langchain-groq` (Groq-hosted `qwen/qwen3.6-27b`) |
+| Tool protocol | Model Context Protocol (MCP) — `FastMCP` for servers, `langchain-mcp-adapters` (`MultiServerMCPClient`) for the agent |
+| GitHub integration | PyGithub |
+| Code knowledge graph | Graphify (`graphifyy`) — static analysis → graph.json + Markdown report, served over its own MCP tools |
+| Persistence | PostgreSQL via `psycopg` + `langgraph-checkpoint-postgres` (`AsyncPostgresSaver`) |
+| Deployment | Docker |
+| Dependency management | `uv` (`pyproject.toml` + `uv.lock`) for dev, `requirements.txt` for the Docker image |
+| Testing | `unittest`, `pytest` (with FastAPI's `TestClient`) |
 
 ## Project structure
 
 ```text
 AIOps/
 ├── app/
-│   ├── agent.py
-│   ├── config.py
-│   ├── db.py
-│   ├── main.py
-│   ├── security.py
-│   └── telegram.py
+│   ├── main.py         # FastAPI app: webhook auth, dedup, message routing, Telegram replies
+│   ├── agent.py         # LangGraph agent: MCP client setup, LLM node, human-approval node, streaming
+│   ├── db.py            # Postgres helper (WIP, not wired into the running app)
+│   ├── config.py        # empty — reserved for centralizing settings
+│   ├── security.py      # empty — reserved for auth/allowlist logic
+│   └── telegram.py      # empty — reserved for a Telegram client wrapper
 ├── mcp_server/
-│   ├── github_tools.py
-│   └── server.py
-├── tests/
-│   ├── db.py
-│   ├── first.py
-│   ├── github_api.py
-│   ├── server.py
-│   └── test_agent.py
+│   ├── server.py         # FastMCP server: create_github_issue, sync_codebase tools
+│   └── github_tools.py   # PyGithub wrapper used by create_github_issue
+├── graph/
+│   ├── code_server.py     # Standalone demo: LangGraph agent that answers codebase questions via Graphify's MCP tools
+│   ├── test.py            # Toy FastAPI app used as a target to build a graph against
+│   └── graphify-out/      # Generated artifacts: graph.json, graph.html (visual), GRAPH_REPORT.md, analysis cache
+├── tests/                 # unittest/pytest coverage + exploratory scripts
+├── repo/                  # Local clone that sync_codebase pulls into (empty until first sync)
+├── not_main.py            # Earlier, minimal webhook prototype kept for reference
 ├── Dockerfile
-├── requirements.txt
-├── pyproject.toml
-├── README.md
-├── plan.md
-├── not_main.py
-└── .env
+├── requirements.txt / pyproject.toml / uv.lock
+└── .env.example
 ```
-
-## Features
-
-- Natural-language issue creation from Telegram messages
-- Agent-based reasoning using LangGraph and LLM tools
-- Custom MCP integration for GitHub actions
-- Human approval flow before making critical actions
-- FastAPI backend for webhook processing
-- Docker support for easy deployment
-- Environment-based configuration for secrets and tokens
-
-## Example user flow
-
-A user sends:
-
-"Create a GitHub issue for a bug where users cannot log in after resetting their password."
-
-The bot will:
-
-- parse the message
-- determine that the user wants a GitHub issue created
-- gather details from the request
-- call the MCP server tool to create a GitHub issue
-- send a confirmation back to Telegram
 
 ## Environment variables
 
-Create a .env file in the project root with values like:
+The running code reads these (some names differ from the checked-in `.env.example` — this list reflects what's actually used):
 
 ```env
-TELEGRAM_BOT_TOKEN=your_telegram_bot_token
-WEBHOOK_SECRET_TOKEN=your_webhook_secret
-GROQ_API_KEY=your_groq_key
-GITHUB_TOKEN=your_github_personal_access_token
-DATABASE_URL=postgresql://user:password@host:port/dbname
-ALLOWED_USERS=123456789,987654321
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token       # app/main.py
+WEBHOOK_SECRET_TOKEN=your_webhook_secret         # app/main.py — checked against Telegram's secret header
+ALLOWED_USERS=123456789,987654321                # app/main.py — comma-separated Telegram user IDs
+GROQ_API_KEY=your_groq_key                       # read implicitly by langchain_groq.ChatGroq
+DATABASE_URL=postgresql://user:pass@host:port/db # app/agent.py — LangGraph's Postgres checkpointer
+GITHUB_TOKEN=your_github_personal_access_token   # mcp_server/github_tools.py
+GITHUB_REPOSITORY=owner/repo                     # mcp_server/server.py — default target repo for issues
 ```
 
-Important:
-
-- Never commit secrets to Git
-- Keep tokens inside environment variables only
-- Restrict GitHub tokens to the minimum permissions needed
+Never commit secrets, and scope `GITHUB_TOKEN` to the minimum permissions needed (issue creation only, on a test repo while developing).
 
 ## Local development
 
-1. Create and activate a virtual environment.
-2. Install dependencies:
-
 ```bash
+# install dependencies (pick one)
+uv sync
+# or
 pip install -r requirements.txt
-```
 
-3. Configure your .env file.
-4. Start the app locally:
-
-```bash
+# configure .env, then run
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-5. Expose the app with ngrok or your public tunnel if using Telegram webhooks.
+Expose the app with a public tunnel (ngrok or similar) and register that URL as your Telegram bot's webhook to test end-to-end.
 
 ## Docker
 
-Build the Docker image:
-
 ```bash
 docker build -t telegram-agent-bot .
-```
-
-Run the container:
-
-```bash
 docker run -d --name telegram-bot-container -p 8000:8000 --env-file .env telegram-agent-bot
 ```
 
-## Security notes
+## Known limitations
 
-This project performs real GitHub actions, so security is important.
-
-- Validate Telegram webhook secrets
-- Restrict access to allowed user IDs
-- Use GitHub tokens with minimal required permissions
-- Use a dedicated test repository for development
-- Avoid exposing secrets in logs or commit history
-
-## Current purpose
-
-This project demonstrates how to build a practical AI agent that connects:
-
-- a user-facing chat app
-- an LLM orchestration layer
-- tool execution through MCP
-- real external system actions
-
-The core idea is to allow users to request operational tasks in plain English and have an AI workflow translate that into real GitHub work items.
-
-## Future improvements
-
-- Support issue labels, milestone assignment, and assignees
-- Add support for pull requests and other GitHub workflows
-- Improve approval and confirmation flow for destructive tasks
-- Add better logging and observability
-- Add tests for webhook handling and GitHub tool execution
+- `mcp_server/server.py` hardcodes the codebase path `sync_codebase` operates on (`REPO_DIR`) to a local absolute path — it targets a specific machine, not a configurable one.
+- `app/config.py`, `app/security.py`, and `app/telegram.py` are empty placeholders; the logic they'd hold currently lives inline in `app/main.py`.
+- `app/db.py` isn't imported by the running app — Postgres access for the agent's checkpointer goes through `langgraph-checkpoint-postgres` directly in `app/agent.py`.
 
 ## License
 
